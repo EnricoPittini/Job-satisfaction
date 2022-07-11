@@ -1,4 +1,8 @@
 import random
+import numpy as np
+import itertools
+import pandas as pd
+
 
 def add_bias(data, evidence, variable, positive=True, amount=0.2):
     """Adds some bias in the given dataset, for injecting a certain relationship.
@@ -78,3 +82,100 @@ def add_bias(data, evidence, variable, positive=True, amount=0.2):
         pos_amount += step_amount
     
     return data
+
+
+
+def compute_cpd(data, variable, evidences=None):
+    """Computes the CPD of `variable` with respect to the `evidences`, using the given dataset.
+
+    The list of evidence variables in `evidences` could be empty: in such case, the prior distribution of `variable` is 
+    computed.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Dataset
+    variable : str
+        Variable on which the CPD is computed
+    evidences : list of str, optional
+        List of evidence variables, by default None
+
+    Returns
+    -------
+    cpd: pd.DataFrame
+        Desired CPD
+
+    Notes
+    -------
+    In the comments in the code, we denote `variable` as X, with a specific possible value x. And we denote `evidences` as 
+    X1,...,Xk, with specific possible values x1, ..., xk.
+
+    """
+    # All possible values x of X
+    variable_support = sorted(data[variable].unique())
+    # Number of possible values of X
+    m = len(variable_support)
+    
+    if evidences is None:
+        # No evidences: we want to build a simple prior distribution. Only one row, with `m` columns.
+        n = 1  # Number of rows
+        rows_constraints = [[]]  # Only one row, with no constraints
+    else:
+        # We have evidences: we want to build the CPD. `n` rows, which is the number of possible different combinations of 
+        # values for X1,...Xk. The number of columns is instead `m`.
+
+        # List containing the constraints corresponding to each row of the CPD. Basically, a constraint is of the form 
+        # X1=x1,...,Xk=xk, where x1,...,xk is the specific combination of values associated to that row.
+        rows_constraints = list(itertools.product(*[sorted(data[evidence].unique()) for evidence in evidences]))
+        n = len(rows_constraints)  # Number of rows
+
+    # Initiale the CPD to a DataFrame n*m         
+    cpd = pd.DataFrame(np.zeros((n,m)), columns=variable_support)
+    
+    # Index to set to the CPD
+    index = []
+
+    # Iterate across all the rows    
+    for row, row_constraints in enumerate(rows_constraints):
+        # Current new row `row`. Corresponding combination of values: x1,...,xk
+
+        # Index of the current new row
+        idx = ''
+
+        # Copy of the dataset
+        data_supp = data.copy()
+
+        # Now we want to keep in `data_supp` only the instances satisfying all the constraints X1=x1,...,Xk=xk.
+        # We iterate over all constraints Xi=xi, and we enforce that constraint on the dataset.
+        for i,constr in enumerate(row_constraints):
+            # Evidence variable Xi
+            evidence = evidences[i]
+            # Updating `idx`
+            idx += f' {evidence}=={constr} '
+            # Updating `data_supp`, after enforcing the constraint Xi=xi
+            data_supp = data_supp[data_supp[evidence]==constr]
+        
+        # Current new row to add into the CPD.
+        # For each value X=x, we compute P(X=x|X1=x1,...,Xk=xk) by computing the fraction of instances in the current 
+        # `data_supp` s.t. X=x.
+        new_row = [data_supp[variable][data_supp[variable]==variable_value].count()/data_supp[variable].count() 
+                   for variable_value in variable_support]
+        # Add the new row
+        cpd.iloc[row,:] = new_row 
+
+        # Add the index of that row into `index`
+        index.append(idx)
+
+    # Fill eventual missing values  
+    values = {variable_value:cpd.fillna(0.0)[variable_value].mean() for variable_value in variable_support[:-1]}
+    values[variable_support[-1]] = 1-sum([fill for v,fill in values.items()])
+    cpd = cpd.fillna(values)
+        
+    # Set the index to the CPD
+    cpd['Evidences'] = index
+    cpd = cpd.set_index('Evidences')
+    
+    # Set the name of the columns
+    cpd.columns.name = variable
+        
+    return cpd
